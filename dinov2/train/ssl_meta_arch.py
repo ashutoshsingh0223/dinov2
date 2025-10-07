@@ -15,9 +15,10 @@ from dinov2.layers import DINOHead
 from dinov2.utils.utils import has_batchnorms
 from dinov2.utils.param_groups import get_params_groups_with_decay, fuse_params_groups
 from dinov2.fsdp import get_fsdp_wrapper, ShardedGradScaler, get_fsdp_modules, reshard_fsdp_model
-
+from collections import OrderedDict
 from dinov2.models.vision_transformer import BlockChunk
-
+import math
+import torch.nn.functional as F
 
 try:
     from xformers.ops import fmha
@@ -43,10 +44,73 @@ class SSLMetaArch(nn.Module):
         logger.info(f"OPTIONS -- architecture : embed_dim: {embed_dim}")
 
         if cfg.student.pretrained_weights:
-            chkpt = torch.load(cfg.student.pretrained_weights)
+            chkpt = torch.load(cfg.student.pretrained_weights,map_location=torch.device('cpu'))
+            if 'teacher' in chkpt.keys():
+                chkpt = chkpt["teacher"]
             logger.info(f"OPTIONS -- pretrained weights: loading from {cfg.student.pretrained_weights}")
-            student_backbone.load_state_dict(chkpt["model"], strict=False)
+            convert_chkpt = chkpt.copy() 
+            num_blocks = int(sum(['blocks'in i for i in chkpt.keys()]) / 14)
+            for key in chkpt.keys():
+                
+                new_name = key.replace('backbone.','')
+                if cfg.student.block_chunks > 0:
+                    if 'blocks.' in new_name:
+                        no_block_chunks = sum([i.isdigit() for i in new_name.split('.')]) == 1
+                        if no_block_chunks:
+                            block_idx = int(new_name.split('.')[1])
+                            chunk_idx = int(block_idx / (num_blocks / cfg.student.block_chunks))
+                            new_name = new_name.replace('blocks.', f'blocks.{chunk_idx}.')
+                
+                if key=='backbone.patch_embed.proj.weight' or key=='patch_embed.proj.weight':
+                    patch_embed_weight = convert_chkpt.pop(key)
+                    if cfg.student.patch_size != patch_embed_weight.shape[-1]:
+                        new_patch_size = cfg.student.patch_size
+                        logger.info(f"Resize the patch_embed shape from {patch_embed_weight.shape}"
+                                    f" to {student_backbone.patch_embed.proj.weight.shape}.")
+                        # interpolate
+                        patch_embed_weight = torch.nn.functional.interpolate(
+                            patch_embed_weight,
+                            size=(new_patch_size, new_patch_size),
+                            mode="bicubic",
+                            align_corners=False,
+                            antialias=False,
+                        )
+                        logger.info(f"Resized the patch_embed shape to {patch_embed_weight.shape}.")
+                    convert_chkpt[new_name] = patch_embed_weight
+                    continue
 
+
+                if key=='backbone.pos_embed' or key == 'pos_embed':
+                    pos_embed = convert_chkpt.pop(key)
+                    class_pos_embed = pos_embed[:,0]
+                    patch_pos_embed = pos_embed[:, 1:]
+                    N = pos_embed.shape[1] - 1
+                    M = int(math.sqrt(N))  # Recover the number of patches in each dimension
+                    assert N == M * M
+                    kwargs = {}
+                    w0 = h0 = cfg.crops.global_crops_size/cfg.student.patch_size
+                    sx = float(w0) / M
+                    sy = float(h0 ) / M
+                    kwargs["scale_factor"] = (sx, sy)
+                    patch_pos_embed = nn.functional.interpolate(
+                        patch_pos_embed.reshape(1, M, M, embed_dim).permute(0, 3, 1, 2),
+                        mode="bicubic",
+                        align_corners=False,
+                        antialias=False,
+                        **kwargs,
+                    )
+                    assert (w0, h0) == patch_pos_embed.shape[-2:]
+                    patch_pos_embed = patch_pos_embed.permute(0, 2, 3, 1).view(1, -1, embed_dim)
+                    pos_embed = torch.cat((class_pos_embed.unsqueeze(0), patch_pos_embed), dim=1)
+                    convert_chkpt[new_name] = pos_embed
+                    continue
+
+
+                convert_chkpt[new_name] = convert_chkpt.pop(key)
+
+            missing_keys,unexpected_keys =   student_backbone.load_state_dict(convert_chkpt, strict=False)
+            logger.info(f"missing keys:{missing_keys}")
+            logger.info(f"unexpected keys:{unexpected_keys}")
         self.embed_dim = embed_dim
         self.dino_out_dim = cfg.dino.head_n_prototypes
 
@@ -105,11 +169,26 @@ class SSLMetaArch(nn.Module):
                     bottleneck_dim=cfg.ibot.head_bottleneck_dim,
                     nlayers=cfg.ibot.head_nlayers,
                 )
+
                 student_model_dict["ibot_head"] = ibot_head()
                 teacher_model_dict["ibot_head"] = ibot_head()
             else:
                 logger.info("OPTIONS -- IBOT -- head shared with DINO")
 
+        if cfg.student.pretrained_weights and cfg.student.load_heads_from_pretrained:
+            ibothead_chkpt = {}
+            dinohead_chkpt = {}
+            for key in chkpt.keys():
+                if 'ibot_head' in key:
+                    ibothead_chkpt[key.replace('ibot_head.','')] = chkpt[key]
+                if 'dino_head' in key:
+                    dinohead_chkpt[key.replace('dino_head.','')] = chkpt[key]
+            missing_keys, unexpected_keys =  student_model_dict["dino_head"].load_state_dict(dinohead_chkpt, strict=False)
+            logger.info(f"dion_head missing keys:{missing_keys}")
+            logger.info(f"dion_head unexpected keys:{unexpected_keys}")
+            missing_keys, unexpected_keys = student_model_dict["ibot_head"].load_state_dict(ibothead_chkpt, strict=False)
+            logger.info(f"ibot_head missing keys:{missing_keys}")
+            logger.info(f"ibot_head unexpected keys:{unexpected_keys}")
         self.need_to_synchronize_fsdp_streams = True
 
         self.student = nn.ModuleDict(student_model_dict)
@@ -124,6 +203,9 @@ class SSLMetaArch(nn.Module):
         raise NotImplementedError
 
     def backprop_loss(self, loss):
+
+
+
         if self.fp16_scaler is not None:
             self.fp16_scaler.scale(loss).backward()
         else:
@@ -353,6 +435,15 @@ class SSLMetaArch(nn.Module):
             ) = self.student.backbone._streams = self.teacher.backbone._streams
             self.need_to_synchronize_fsdp_streams = False
 
+    def freeze_backbone(self):
+        for p in self.student.parameters():
+            p.requires_grad = False
+        logger.info("Student's backbone has been frozen")
+
+    def unfreeze_backbone(self):
+        for p in self.student.parameters():
+            p.requires_grad = True
+        logger.info("Student's backbone has been unfrozen")
     def update_teacher(self, m):
         student_param_list = []
         teacher_param_list = []

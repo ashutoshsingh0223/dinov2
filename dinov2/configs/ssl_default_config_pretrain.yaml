@@ -74,7 +74,8 @@ student:
   drop_path_rate: 0.3
   layerscale: 1.0e-05
   drop_path_uniform: true
-  pretrained_weights: ''
+  pretrained_weights: '/mnt/gpu_nfs/USERS/sashutosh/dinov2/data/dinov2_vitl14_pretrain.pth'
+  load_heads_from_pretrained: false
   ffn_layer: "mlp"
   block_chunks: 0
   qkv_bias: true

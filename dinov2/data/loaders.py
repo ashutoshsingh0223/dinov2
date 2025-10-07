@@ -11,6 +11,7 @@ import torch
 from torch.utils.data import Sampler
 
 from .datasets import ImageNet, ImageNet22k
+from .datasets.image_net_stripped import ImageNet as ImageNetStripped
 from .samplers import EpochSampler, InfiniteSampler, ShardedInfiniteSampler
 
 
@@ -53,9 +54,11 @@ def _parse_dataset_str(dataset_str: str):
         kwargs[key] = value
 
     if name == "ImageNet":
-        class_ = ImageNet
+        # class_ = ImageNet
+        class_ = ImageNetStripped
         if "split" in kwargs:
-            kwargs["split"] = ImageNet.Split[kwargs["split"]]
+            # kwargs["split"] = ImageNet.Split[kwargs["split"]]
+            kwargs["split"] = ImageNetStripped.Split[kwargs["split"]]
     elif name == "ImageNet22k":
         class_ = ImageNet22k
     else:
