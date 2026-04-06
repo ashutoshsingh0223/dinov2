@@ -7,19 +7,19 @@ compute_precision:
       sharding_strategy: SHARD_GRAD_OP
       mixed_precision:
         param_dtype: fp16
-        reduce_dtype: fp16
+        reduce_dtype: fp32
         buffer_dtype: fp32
     dino_head:
       sharding_strategy: SHARD_GRAD_OP
       mixed_precision:
         param_dtype: fp16
-        reduce_dtype: fp16
+        reduce_dtype: fp32
         buffer_dtype: fp32
     ibot_head:
       sharding_strategy: SHARD_GRAD_OP
       mixed_precision:
         param_dtype: fp16
-        reduce_dtype: fp16
+        reduce_dtype: fp32 # was fp16
         buffer_dtype: fp32
   student:
     backbone:
@@ -60,12 +60,12 @@ ibot:
   head_hidden_dim: 2048
 train:
   batch_size_per_gpu: 64
-  dataset_path: ImageNet:split=TRAIN:root=/mnt/gpu_nfs/USERS/sashutosh/fm_underwater/data/DUO/images/train
-  output_dir: .
+  dataset_path: TxtImageDataset:split=TRAIN:root=/mnt/gpu_nfs/USERS/sashutosh/dinov2/data/soilsense/
+  output_dir: /mnt/gpu_nfs/USERS/sashutosh/dinov2/data
   saveckp_freq: 20
   seed: 0
   num_workers: 10
-  OFFICIAL_EPOCH_LENGTH: 1250
+  OFFICIAL_EPOCH_LENGTH: 370
   cache_dataset: true
   centering: "centering" # or "sinkhorn_knopp"
 student:
@@ -74,7 +74,7 @@ student:
   drop_path_rate: 0.3
   layerscale: 1.0e-05
   drop_path_uniform: true
-  pretrained_weights: ''
+  pretrained_weights: /mnt/gpu_nfs/USERS/sashutosh/dinov2/data/dinov2_vitl14_pretrain.pth
   load_heads_from_pretrained: false
   ffn_layer: "mlp"
   block_chunks: 0
@@ -91,10 +91,10 @@ teacher:
   teacher_temp: 0.07
   warmup_teacher_temp_epochs: 30
 optim:
-  epochs: 100
+  epochs: 300
   weight_decay: 0.04
   weight_decay_end: 0.4
-  base_lr: 0.004  # learning rate for a batch size of 1024
+  base_lr: 0.0001  # learning rate for a batch size of 1024
   lr: 0.  # will be set after applying scaling rule
   warmup_epochs: 10
   min_lr: 1.0e-06
@@ -115,5 +115,7 @@ crops:
   - 0.32
   global_crops_size: 224
   local_crops_size: 96
+# NOTE: Extracting random crops of size 224x224 from the original images of size 256x256 leads to a significant number of duplicate crops, which can hurt the training. Setting the random crop size to 256.
+  random_crop_size: 256
 evaluation:
-  eval_period_iterations: 12500
+  eval_period_iterations: 7400

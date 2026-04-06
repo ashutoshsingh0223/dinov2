@@ -54,6 +54,12 @@ For python-based LazyConfig, use "path.key=value".
         type=str,
         help="Output directory to save logs and checkpoints",
     )
+    parser.add_argument(
+        "--local-rank",
+        default=0,
+        type=int,
+        help="For distributed training: local_rank",
+    )
 
     return parser
 
@@ -127,7 +133,7 @@ def do_test(cfg, model, iteration):
         eval_dir = os.path.join(cfg.train.output_dir, "eval", iterstring)
         os.makedirs(eval_dir, exist_ok=True)
         # save teacher checkpoint
-        teacher_ckp_path = os.path.join(eval_dir, "teacher_checkpoint.pth")
+        teacher_ckp_path = os.path.join(eval_dir, "teacher_checkpoint_{}.pth".format(iterstring))
         torch.save({"teacher": new_state_dict}, teacher_ckp_path)
 
 
@@ -157,9 +163,9 @@ def do_train(cfg, model, resume=False):
 
     periodic_checkpointer = PeriodicCheckpointer(
         checkpointer,
-        period=3 * OFFICIAL_EPOCH_LENGTH,
+        period=5 * OFFICIAL_EPOCH_LENGTH,
         max_iter=max_iter,
-        max_to_keep=3,
+        max_to_keep=1,
     )
 
     # setup data preprocessing
@@ -178,6 +184,7 @@ def do_train(cfg, model, resume=False):
         cfg.crops.local_crops_number,
         global_crops_size=cfg.crops.global_crops_size,
         local_crops_size=cfg.crops.local_crops_size,
+        random_crop_size=cfg.crops.random_crop_size,
     )
 
     collate_fn = partial(

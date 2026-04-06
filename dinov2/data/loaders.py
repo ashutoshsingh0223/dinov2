@@ -12,6 +12,7 @@ from torch.utils.data import Sampler
 
 from .datasets import ImageNet, ImageNet22k
 from .datasets.image_net_stripped import ImageNet as ImageNetStripped
+from .datasets.txt_image_dataset import TxtImageDataset
 from .samplers import EpochSampler, InfiniteSampler, ShardedInfiniteSampler
 
 
@@ -61,6 +62,11 @@ def _parse_dataset_str(dataset_str: str):
             kwargs["split"] = ImageNetStripped.Split[kwargs["split"]]
     elif name == "ImageNet22k":
         class_ = ImageNet22k
+
+    elif name == "TxtImageDataset":
+        class_ = TxtImageDataset
+        if "split" in kwargs:
+            kwargs["split"] = TxtImageDataset.Split[kwargs["split"]]
     else:
         raise ValueError(f'Unsupported dataset "{name}"')
 

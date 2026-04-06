@@ -24,12 +24,14 @@ class DataAugmentationDINO(object):
         local_crops_number,
         global_crops_size=224,
         local_crops_size=96,
+        random_crop_size=None,
     ):
         self.global_crops_scale = global_crops_scale
         self.local_crops_scale = local_crops_scale
         self.local_crops_number = local_crops_number
         self.global_crops_size = global_crops_size
         self.local_crops_size = local_crops_size
+        self.random_crop_size = random_crop_size
 
         logger.info("###################################")
         logger.info("Using data augmentation parameters:")
@@ -38,7 +40,11 @@ class DataAugmentationDINO(object):
         logger.info(f"local_crops_number: {local_crops_number}")
         logger.info(f"global_crops_size: {global_crops_size}")
         logger.info(f"local_crops_size: {local_crops_size}")
+        logger.info(f"random_crop_size: {random_crop_size}")
         logger.info("###################################")
+
+        # optional initial random crop to reduce large images before augmentations
+        self.initial_crop = transforms.RandomCrop(random_crop_size) if random_crop_size is not None else None
 
         # random resized crop and flip
         self.geometric_augmentation_global = transforms.Compose(
@@ -95,6 +101,10 @@ class DataAugmentationDINO(object):
 
     def __call__(self, image):
         output = {}
+
+        # initial random crop (if configured)
+        if self.initial_crop is not None:
+            image = self.initial_crop(image)
 
         # global crops:
         im1_base = self.geometric_augmentation_global(image)
